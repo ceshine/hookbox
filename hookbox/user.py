@@ -13,24 +13,28 @@ class User(object):
     _options = {
         'reflective': True,
         'moderated_message': True,
+        'per_connection_subscriptions': False,
     }
 
     def __init__(self, server, name, **options):
         self.server = server
         self.name = name
         self.connections = []
-        self.channels = []
+        self.channels = {}
         self._temp_cookie = ""
         self.update_options(**self._options)
         self.update_options(**options)
 
     def serialize(self):
         return {
-            'channels': [ chan.name for chan in self.channels ],
+            'channels': [ chan_name for chan_name in self.channels ],
             'connections': [ conn.id for conn in self.connections ],
             'name': self.name,
             'options': dict([ (key, getattr(self, key)) for key in self._options])
         }
+
+    def extract_valid_options(self, options):
+        return dict([ (key, options.pop(key, self._options[key])) for key in self._options ])
 
     def update_options(self, **options):
         # TODO: this can't remain so generic forever. At some point we need
@@ -80,37 +84,57 @@ class User(object):
         eventlet.spawn(self._send_initial_subscriptions, conn)
         
     def _send_initial_subscriptions(self, conn):
-        for channel in self.channels:
-            frame = channel._build_subscribe_frame(self)
-            conn.send_frame('SUBSCRIBE', frame)
+        for (channel_name, channel_connections) in self.channels.items():
+            if self.server.exists_channel(channel_name):
+                frame = self.server.get_channel(self, channel_name)._build_subscribe_frame(self)
+                conn.send_frame('SUBSCRIBE', frame)
             
     def remove_connection(self, conn):
+        if conn not in self.connections:
+            return
         self.connections.remove(conn)
+
+        # Remove the connection from the channels it was subscribed to,
+        # unsubscribing the user from any channels which they no longer
+        # have open connections to
+        for (channel_name, channel_connections) in self.channels.items():
+            if conn not in self.channels[channel_name]:
+                continue
+            self.channels[channel_name].remove(conn)
+            if self.per_connection_subscriptions and not self.channels[channel_name]:
+                if self.server.exists_channel(channel_name):
+                    self.server.get_channel(self, channel_name).unsubscribe(self, needs_auth=True, force_auth=True)
+
         if not self.connections:
-            # each call to user_disconnected might result in an immediate call
-            # to self.channel_unsubscribed, thus modifying self.channels and
-            # messing up our loop. So we loop over a copy of self.channels...
-            
-            for channel in self.channels[:]:
-                channel.user_disconnected(self)
-#            print 'tell server to remove user...'
+            for (channel_name, connections) in self.channels.items():
+                if self.server.exists_channel(channel_name):
+                    self.server.get_channel(self, channel_name).unsubscribe(self, needs_auth=True, force_auth=True)
             # so the disconnect callback has a cookie
             self._temp_cookie = conn.get_cookie()
             self.server.remove_user(self.name)
             
-    def channel_subscribed(self, channel):
-        self.channels.append(channel)
+    def channel_subscribed(self, channel, conn=None):
+        if channel.name not in self.channels:
+            self.channels[channel.name] = [ conn ]
+        elif conn not in self.channels[channel.name]:
+            self.channels[channel.name].append(conn)
         
     def channel_unsubscribed(self, channel):
-        self.channels.remove(channel)
+        if channel.name in self.channels:
+            del self.channels[channel.name]
         
     def get_name(self):
         return self.name
     
-    def send_frame(self, name, args={}, omit=None):
-        for conn in self.connections:
+    def send_frame(self, name, args={}, omit=None, channel=None):
+        if not self.per_connection_subscriptions:
+            channel = None
+        if channel and channel.name not in self.channels:
+            return
+        for conn in (self.channels[channel.name] if channel else self.connections)[:]:
             if conn is not omit:
-                conn.send_frame(name, args)
+                if conn.send_frame(name, args) is False:
+                    self.remove_connection(conn)
 
     def get_cookie(self, conn=None):
         if conn:

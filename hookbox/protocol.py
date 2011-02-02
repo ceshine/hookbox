@@ -30,10 +30,11 @@ class HookboxConn(object):
         try:
             self._rtjp_conn.send_frame(*args, **kw).wait()
         except Exception, e:
-            if 'closed' in str(e).lower():
+            if 'closed' in str(e).lower() or 'not connected' in str(e).lower():
                 pass
             else:
                 self.logger.warn("Unexpected error: %s", e, exc_info=True)
+            return False
 
     def send_error(self, *args, **kw):
         return self._rtjp_conn.send_error(*args, **kw)
@@ -101,9 +102,8 @@ class HookboxConn(object):
         self.cookie_string = fargs['cookie_string']
         self.cookies = parse_cookies(fargs['cookie_string'])
         self.cookie_id = self.cookies.get(self.cookie_identifier, None)
-        self.server.connect(self)
+        self.server.connect(self, fargs.get('payload', 'null'))
         self.state = 'connected'
-        self.send_frame('CONNECTED', { 'name': self.user.get_name() })
     
     def frame_SUBSCRIBE(self, fid, fargs):
         if self.state != 'connected':

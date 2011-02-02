@@ -45,15 +45,7 @@ class Channel(object):
         #print 'self._options is', self._options
         self.state = {}
         self.update_options(**self._options)
-        self.update_options(**options)
-
-    def user_disconnected(self, user):
-        # TODO: remove this pointless check, it should never happen, right?
-        if user not in self.subscribers:
-            return
-        self.unsubscribe(user, needs_auth=True, force_auth=True)
-
-        
+        self.update_options(**options)       
 
     def set_history(self, history):
         self.history = history
@@ -163,7 +155,7 @@ class Channel(object):
             encoded_payload = json.loads(payload)
         except:
             raise ExpectedException("Invalid json for payload")
-        payload = encoded_payload
+        payload, options = encoded_payload, {}
         if needs_auth and (self.moderated or self.moderated_publish):
             form = { 'channel_name': self.name, 'payload': json.dumps(encoded_payload) }
             success, options = self.server.http_request('publish', user.get_cookie(conn), form, conn=conn)
@@ -183,8 +175,13 @@ class Channel(object):
         omit = None
         if not self.reflective:
             omit = conn
-        for subscriber in self.subscribers:
-            subscriber.send_frame('PUBLISH', frame, omit=omit)
+
+        if options.get('only_to_sender', False):
+            user.send_frame('PUBLISH', frame, omit=omit, channel=self)
+        else:
+            for subscriber in self.subscribers:
+                subscriber.send_frame('PUBLISH', frame, omit=omit, channel=self)
+
         self.server.admin.channel_event('publish', self.name, frame)
         if self.history_size:
             del frame['channel_name']
@@ -192,8 +189,8 @@ class Channel(object):
             self.prune_history()
 
     def subscribe(self, user, conn=None, needs_auth=True):
-
         if user in self.subscribers:
+            user.channel_subscribed(self, conn=conn)
             return
 
         has_initial_data = False
@@ -211,21 +208,21 @@ class Channel(object):
             
         if has_initial_data or self.history:
             frame = dict(channel_name=self.name, history=self.history, initial_data=initial_data)
-            user.send_frame('CHANNEL_INIT', frame)
+            user.send_frame('CHANNEL_INIT', frame, channel=self)
 
         self.subscribers.append(user)
-        user.channel_subscribed(self)
+        user.channel_subscribed(self, conn=conn)
         _now = get_now()
         frame = {"channel_name": self.name, "user": user.get_name(), "datetime": _now}
         self.server.admin.channel_event('subscribe', self.name, frame)
         if self.presenceful:
             for subscriber in self.subscribers:
                 if subscriber == user: continue
-                subscriber.send_frame('SUBSCRIBE', frame)
+                subscriber.send_frame('SUBSCRIBE', frame, channel=self)
                 
         frame = self._build_subscribe_frame(user, initial_data)
         
-        user.send_frame('SUBSCRIBE', frame)
+        user.send_frame('SUBSCRIBE', frame, channel=self)
             
         if self.history_size:
             self.history.append(('SUBSCRIBE', {"user": user.get_name(), "datetime": _now }))
@@ -250,7 +247,7 @@ class Channel(object):
             "deletes": deletes 
         }
         for subscriber in self.subscribers:
-            subscriber.send_frame('STATE_UPDATE', frame)
+            subscriber.send_frame('STATE_UPDATE', frame, channel=self)
 
     # TODO: We can do much better than this with a recursive json diffing
     #       algorithm. This is good enough for now...
@@ -296,7 +293,7 @@ class Channel(object):
             frame['presence'] = [];
         return frame
 
-    def unsubscribe(self, user, conn=None, needs_auth=True, force_auth=False):
+    def unsubscribe(self, user, conn=None, needs_auth=True, force_auth=False, destroy_empty=True):
         if user not in self.subscribers:
             return
         if needs_auth and (self.moderated or self.moderated_unsubscribe):
@@ -315,8 +312,8 @@ class Channel(object):
         if self.presenceful:
             for subscriber in self.subscribers:
                 if subscriber == user: continue
-                subscriber.send_frame('UNSUBSCRIBE', frame)
-        user.send_frame('UNSUBSCRIBE', frame)
+                subscriber.send_frame('UNSUBSCRIBE', frame, channel=self)
+        user.send_frame('UNSUBSCRIBE', frame, channel=self)
         self.subscribers.remove(user)
         user.channel_unsubscribed(self)
         if self.history_size:
@@ -324,7 +321,7 @@ class Channel(object):
             self.history.append(('UNSUBSCRIBE', frame))
             self.prune_history()
         
-        if not self.subscribers:
+        if not self.subscribers and destroy_empty:
             self.server.destroy_channel(self.name)
     
     def destroy(self, needs_auth=True):
@@ -338,7 +335,7 @@ class Channel(object):
         if success:
             self.presenceful=False # Don't send out all unsubscribes to all users
             for user in self.subscribers:
-                self.unsubscribe(user, needs_auth=needs_auth, force_auth=True)
+                self.unsubscribe(user, needs_auth=needs_auth, force_auth=True, destroy_empty=False)
         return success
         
     def serialize(self):
