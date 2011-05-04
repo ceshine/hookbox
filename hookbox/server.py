@@ -33,6 +33,7 @@ try:
 except:
     import simplejson as json
 
+from __init__ import __version__
 
 class EmptyLogShim(object):
     def write(self, *args, **kwargs):
@@ -41,7 +42,6 @@ class EmptyLogShim(object):
 logger = logging.getLogger('hookbox')
 
 access_logger = logging.getLogger('access')
-    
 
 
 class HookboxServer(object):
@@ -55,20 +55,20 @@ class HookboxServer(object):
         self.base_host = config['cbhost']
         self.base_port = config['cbport']
         self.base_path = config['cbpath']
-            
+
         self._root_wsgi_app = urlmap.URLMap()
         self.csp = Listener()
         self._root_wsgi_app['/csp'] = self.csp
         self._root_wsgi_app['/ws'] = self._ws_wrapper
         self._ws_wsgi_app = eventlet.websocket.WebSocketWSGI(self._ws_wsgi_app)
-        
+
         static_path = os.path.join(os.path.split(os.path.abspath(__file__))[0], 'static')
         self._root_wsgi_app['/static'] = urlparser.StaticURLParser(static_path)
-        
+
         self.api = HookboxAPI(self, config)
         self._web_api_app = HookboxWebAPI(self.api)
 
-        
+
         self.admin = HookboxAdminApp(self, config, outputter)
         self._root_wsgi_app['/admin'] = self.admin
         self.channels = {}
@@ -88,12 +88,12 @@ class HookboxServer(object):
         sock = SockWebSocketWrapper(ws)
         rtjp_conn = rtjp_eventlet.RTJPConnection(sock=sock)
         self._accept(rtjp_conn)
-        
+
     def run(self):
         if not self._bound_socket:
             self._bound_socket = eventlet.listen((self.config.interface, self.config.port))
         eventlet.spawn(eventlet.wsgi.server, self._bound_socket, self._root_wsgi_app, log=EmptyLogShim())
-        
+
         # We can't get the main interface host, port from config, in case it
         # was passed in directly to the constructor as a bound sock.
         main_host, main_port = self._bound_socket.getsockname()
@@ -106,8 +106,8 @@ class HookboxServer(object):
             if api_port is None: api_port = main_port
             if (main_host, main_port) != (api_host,  api_port):
                 self._bound_api_socket = eventlet.listen((api_host, api_port))
-                
-        # If we have a _bound_api_socket at this point, (either from constructor, 
+
+        # If we have a _bound_api_socket at this point, (either from constructor,
         # or previous block) we should turn it into a wsgi server.
         if self._bound_api_socket:
               logger.info("Listening to hookbox/webapi on http://%s:%s", *self._bound_api_socket.getsockname())
@@ -117,11 +117,11 @@ class HookboxServer(object):
               # Might as well expose it over / as well
               api_url_map['/'] = self._web_api_app
               eventlet.spawn(eventlet.wsgi.server, self._bound_api_socket, api_url_map, log=EmptyLogShim())
-              
+
         # otherwise, expose the web api over the main interface/wsgi app
         else:
             self._root_wsgi_app['/web'] = self._web_api_app
-        
+
         ev = eventlet.event.Event()
         self._rtjp_server.listen(sock=self.csp)
         eventlet.spawn(self._run, ev)
@@ -143,7 +143,7 @@ class HookboxServer(object):
                 if not rtjp_conn:
                     continue
                 access_logger.info("Incoming CSP connection\t%s\t%s",
-                    rtjp_conn._sock.environ.get('HTTP_X_FORWARDED_FOR', rtjp_conn._sock.environ.get('REMOTE_ADDR', '')), 
+                    rtjp_conn._sock.environ.get('HTTP_X_FORWARDED_FOR', rtjp_conn._sock.environ.get('REMOTE_ADDR', '')),
                     rtjp_conn._sock.environ.get('HTTP_HOST'))
                 eventlet.spawn(self._accept, rtjp_conn)
 #                conn = protocol.HookboxConn(self, rtjp_conn, self.config)
@@ -173,7 +173,7 @@ class HookboxServer(object):
             scheme = self.config["cbhttps"] and "https" or "http"
             host = self.config["cbhost"]
             port = self.config["cbport"]
-        
+
         if path_name:
             form['action'] = path_name
         if self.config['webhook_secret']:
@@ -197,13 +197,15 @@ class HookboxServer(object):
             url = urlparse.urlunparse((scheme,host + ":" + str(port), '', '','',''))
         else:
             url = urlparse.urlunparse((scheme,host, '', '','',''))
-       
-        
+
+
         headers = {'content-type': 'application/x-www-form-urlencoded'}
         if cookie_string:
             headers['Cookie'] = cookie_string
         if conn:
             headers['X-Real-IP'] = conn.get_remote_addr()
+        if self.config["cbsendhookboxversion"]:
+            headers['X-Hookbox-Version'] = __version__
         body = None
         try:
             try:
@@ -281,7 +283,7 @@ class HookboxServer(object):
 
     def get_connection(self, id):
         return self.conns.get(id, None)
-        
+
     def exists_user(self, name):
         return name in self.users
 
@@ -303,7 +305,7 @@ class HookboxServer(object):
                 pass
             except Exception, e:
                 self.logger.warn("Unexpected error when removing user: %s", e, exc_info=True)
-        
+
     def create_channel(self, conn, channel_name, options={}, needs_auth=True):
         if channel_name in self.channels:
             raise ExpectedException("Channel already exists")
@@ -351,7 +353,7 @@ class HookboxServer(object):
 class SockWebSocketWrapper(object):
     def __init__(self, ws):
         self._ws = ws
-        
+
     def recv(self, num):
         # not quite right (ignore num)... but close enough for our use.
         data = self._ws.wait()
@@ -362,9 +364,9 @@ class SockWebSocketWrapper(object):
     def send(self, data):
         self._ws.send(data)
         return len(data)
-        
+
     def sendall(self, data):
         self.send(data)
-        
+
     def __getattr__(self, key):
         return getattr(self._ws, key)
