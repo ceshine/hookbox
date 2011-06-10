@@ -90,11 +90,11 @@ class HookboxOptionParser(object):
                           dest="cbhttps", action="store_true",
                           default=defaults._cbhttps, metavar="HTTPS",
                           help="Use https (instead of http) to make callbacks.")
-        parser.add_option("--cbsendhookboxversion",
-                          dest="cbsendhookboxversion", action="store_true",
-                          default=defaults._cbsendhookboxversion, metavar="SEND_HOOKBOX_VERSION",
-                          help="Send hookbox version info to webhook callbacks using X-Hookbox-Version header.")
-
+        parser.add_option("--cbtrailingslash",
+                          dest="cbtrailingslash", action="store_true",
+                          default=defaults._cbtrailingslash,
+                          help="Append a trailing slash to the callback URL.")
+    
     def _add_callback_path_options(self, parser, defaults):
         parser.add_option('--cb-connect',
                           dest='cb_connect', type='string',
@@ -171,7 +171,7 @@ class HookboxConfig(object):
     defaults._cookie_identifier = NoDefault()
     defaults._webhook_secret = NoDefault()
     defaults._cbhttps = False
-    defaults._cbsendhookboxversion = False
+    defaults._cbtrailingslash = False
     defaults._cb_connect = 'connect'
     defaults._cb_disconnect = 'disconnect'
     defaults._cb_create_channel = 'create_channel'
